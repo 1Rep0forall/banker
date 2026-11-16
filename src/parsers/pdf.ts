@@ -3,11 +3,37 @@ import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
+/** Render each PDF page to a canvas (for OCR of scanned statements). */
+export async function pdfToImages(data: ArrayBuffer, scale = 2.5): Promise<HTMLCanvasElement[]> {
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(data.slice(0)) }).promise;
+  const out: HTMLCanvasElement[] = [];
+  for (let p = 1; p <= Math.min(doc.numPages, 30); p++) {
+    const page = await doc.getPage(p);
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    out.push(canvas);
+  }
+  await doc.destroy();
+  return out;
+}
+
+/** True when a PDF has (almost) no text layer, i.e. it's a scan or photo. */
+export function looksScanned(text: string, pages = 1): boolean {
+  const letters = (text.match(/[A-Za-z0-9]/g) ?? []).length;
+  return letters < 80 * Math.max(1, pages);
+}
+
 interface Item { str: string; x: number; y: number; w: number }
 
 /** Extract text from a PDF, rebuilding visual lines from positioned text items. */
-export async function pdfToText(data: ArrayBuffer): Promise<string> {
-  const doc = await pdfjs.getDocument({ data: new Uint8Array(data) }).promise;
+export async function pdfToText(data: ArrayBuffer): Promise<{ text: string; pages: number }> {
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(data.slice(0)) }).promise;
   const pages: string[] = [];
   for (let p = 1; p <= doc.numPages; p++) {
     const page = await doc.getPage(p);
@@ -40,6 +66,7 @@ export async function pdfToText(data: ArrayBuffer): Promise<string> {
         .join('\n'),
     );
   }
+  const numPages = doc.numPages;
   await doc.destroy();
-  return pages.join('\n');
+  return { text: pages.join('\n'), pages: numPages };
 }

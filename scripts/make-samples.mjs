@@ -50,37 +50,56 @@ DATA:OFXSGML
 ${ofxTx}
 </BANKTRANLIST><LEDGERBAL><BALAMT>4642.40<DTASOF>20261031</LEDGERBAL></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>`);
 
-// Credit card statement: HTML rendered to PDF
-const cardTx = [
-  ['10/06', 'AMAZON MKTPLACE PMTS', 64.18], ['10/09', 'ADOBE *CREATIVE CLOUD', 59.99], ['10/13', 'TRADER JOE S #552', 72.4],
-  ['10/17', 'UBER *TRIP', 23.1], ['10/22', 'TARGET 00012345', 118.75], ['10/27', 'CHIPOTLE 2210', 14.85],
-];
+// Credit card statements: October as a normal (text) PDF, September as a SCANNED image-only PDF for OCR.
 const row = (d, n, a) => `<tr><td>${d}</td><td style="width:340px">${n}</td><td>${a}</td></tr>`;
-const html = `<html><body style="font-family:Helvetica;font-size:12px;padding:30px">
+const cardHtml = ({ cycle, prev, next, due, payment, tx }) => `<html><body style="font-family:Helvetica;font-size:13px;padding:30px;background:#fff">
 <h2>Capital One Quicksilver</h2>
 <p>Account ending in 7730</p>
-<p>Billing Cycle: 10/01/2026 - 10/31/2026</p>
+<p>Billing Cycle: ${cycle}</p>
 <table style="width:420px">
-<tr><td>Previous Balance</td><td>$1,520.00</td></tr>
-<tr><td>New Balance</td><td>$1,623.27</td></tr>
+<tr><td>Previous Balance</td><td>$${prev}</td></tr>
+<tr><td>New Balance</td><td>$${next}</td></tr>
 <tr><td>Minimum Payment Due</td><td>$40.00</td></tr>
-<tr><td>Payment Due Date</td><td>11/25/2026</td></tr>
+<tr><td>Payment Due Date</td><td>${due}</td></tr>
 <tr><td>Credit Limit</td><td>$3,000.00</td></tr></table>
 <h3>Payments, Credits and Adjustments</h3>
-<table style="width:520px">${row('10/22', 'PAYMENT - THANK YOU', '-$250.00')}</table>
+<table style="width:520px">${row(payment, 'PAYMENT - THANK YOU', '-$250.00')}</table>
 <h3>Transactions</h3>
-<table style="width:520px">${cardTx.map(([d, n, a]) => row(d, n, '$' + fmt(a))).join('')}</table>
+<table style="width:520px">${tx.map(([d, n, a]) => row(d, n, '$' + fmt(a))).join('')}</table>
 <h3>Interest Charge Calculation</h3>
 <p>Purchases 27.49% APR</p></body></html>`;
+
+const october = cardHtml({
+  cycle: '10/01/2026 - 10/31/2026', prev: '1,520.00', next: '1,623.27', due: '11/25/2026', payment: '10/22',
+  tx: [
+    ['10/06', 'AMAZON MKTPLACE PMTS', 64.18], ['10/09', 'ADOBE *CREATIVE CLOUD', 59.99], ['10/13', 'TRADER JOE S #552', 72.4],
+    ['10/17', 'UBER *TRIP', 23.1], ['10/22', 'TARGET 00012345', 118.75], ['10/27', 'CHIPOTLE 2210', 14.85],
+  ],
+});
+const september = cardHtml({
+  cycle: '09/01/2026 - 09/30/2026', prev: '1,480.00', next: '1,520.00', due: '10/25/2026', payment: '09/22',
+  tx: [
+    ['09/05', 'COSTCO WHSE #0481', 132.66], ['09/09', 'ADOBE *CREATIVE CLOUD', 59.99], ['09/14', 'SHELL OIL 57442', 38.1],
+    ['09/19', 'PANERA BREAD #601', 18.25], ['09/28', 'AMAZON MKTPLACE PMTS', 41.0],
+  ],
+});
+
 try {
   // require() honours NODE_PATH, so a globally installed Playwright works too
   const { chromium } = createRequire(import.meta.url)('playwright');
   const browser = await chromium.launch();
-  const page = await browser.newPage();
-  await page.setContent(html);
+  const page = await browser.newPage({ viewport: { width: 800, height: 1000 }, deviceScaleFactor: 2 });
+  await page.setContent(october);
   await page.pdf({ path: 'samples/CapitalOne_Statement_Oct2026.pdf' });
+
+  // "Scan": screenshot with a slight tilt, blur and grey tone, then put only the image in a PDF (no text layer).
+  const scanStyle = 'filter:grayscale(1) blur(0.4px) contrast(0.9);transform:rotate(0.6deg);transform-origin:top left;';
+  await page.setContent(september.replace('<body style="', '<body style="' + scanStyle));
+  const img = await page.screenshot({ fullPage: true, type: 'jpeg', quality: 70 });
+  await page.setContent(`<html><body style="margin:0"><img style="width:100%" src="data:image/jpeg;base64,${img.toString('base64')}"></body></html>`);
+  await page.pdf({ path: 'samples/CapitalOne_SCANNED_Sep2026.pdf', printBackground: true });
   await browser.close();
 } catch (e) {
-  console.warn('Skipped PDF sample (Playwright not available):', e.message);
+  console.warn('Skipped PDF samples (Playwright not available):', e.message);
 }
 console.log('Samples written to ./samples');

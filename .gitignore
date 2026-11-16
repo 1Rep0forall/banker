@@ -10,3 +10,4 @@ statements/
 !tests/fixtures/**
 # fake demo statements are fine to commit
 !samples/**
+public/ocr

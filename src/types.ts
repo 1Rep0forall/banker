@@ -107,11 +107,13 @@ export const DEFAULT_SETTINGS: Settings = {
   staleStatementDays: 35,
 };
 
-export type ImportFormat = 'csv' | 'ofx' | 'pdf' | 'text';
+export type ImportFormat = 'csv' | 'ofx' | 'pdf' | 'image' | 'text';
 
 /** Output of every statement parser. */
 export interface ParsedStatement {
   format: ImportFormat;
+  /** Text was read with OCR (scanned PDF or photo), so it deserves a closer look. */
+  ocr?: boolean;
   institution?: string;
   accountName?: string;
   /** Full or masked account number as seen on the statement. */

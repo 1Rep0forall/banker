@@ -51,12 +51,23 @@ export function detectAccountNumber(text: string): { accountNumber?: string; las
 
 export function detectAccountType(text: string): AccountType | undefined {
   const t = text.toLowerCase();
-  if (/(credit card|card ?member|minimum payment|credit limit|credit line|new balance|purchase apr|cash advance)/.test(t)) return 'credit';
-  if (/(loan|principal balance|amount financed|mortgage|payoff amount|escrow)/.test(t)) return 'loan';
-  if (/(brokerage|investment|portfolio|holdings|ira\b|401\(?k)/.test(t)) return 'investment';
-  if (/(savings|money market|high yield|\bapy\b|annual percentage yield)/.test(t)) return 'savings';
-  if (/(checking|debit card|checks paid|chk)/.test(t)) return 'checking';
-  return undefined;
+  // Strong signals win outright.
+  if (/(credit card|card ?member|minimum payment|credit limit|credit line|purchase apr|cash advance)/.test(t)) return 'credit';
+  if (/(principal balance|amount financed|mortgage|payoff amount|escrow|loan balance)/.test(t)) return 'loan';
+  // Otherwise the product named first (usually the letterhead) decides, so
+  // "Everyday Checking ... transfer to savings" is a checking account.
+  const candidates: [AccountType, RegExp][] = [
+    ['investment', /(brokerage|investment account|portfolio|holdings|\bira\b|401\(?k)/],
+    ['savings', /(savings|money market|high yield|\bapy\b|annual percentage yield)/],
+    ['checking', /(checking|debit card|checks paid|\bchk\b)/],
+    ['loan', /\bloan\b/],
+  ];
+  let best: { type: AccountType; idx: number } | undefined;
+  for (const [type, re] of candidates) {
+    const m = re.exec(t);
+    if (m && (!best || m.index < best.idx)) best = { type, idx: m.index };
+  }
+  return best?.type;
 }
 
 const AMOUNT = '(\\(?-?\\$?\\s?[\\d,]+\\.\\d{2}\\)?-?(?:\\s?CR)?)';
@@ -64,7 +75,8 @@ const DATE = '([A-Za-z]{3,9}\\.? \\d{1,2},? \\d{4}|\\d{1,2}[/.-]\\d{1,2}[/.-]\\d
 
 function findAmount(text: string, labels: string[]): number | undefined {
   for (const label of labels) {
-    const m = text.match(new RegExp(label + '[^\\n\\d$(\\-]{0,40}' + AMOUNT, 'i'));
+    // allow a short gap that may contain a date, e.g. "Beginning balance on 11/1 $2,454.12"
+    const m = text.match(new RegExp(label + '[^\\n]{0,40}?' + AMOUNT, 'i'));
     if (m) {
       const v = parseAmount(m[1]);
       if (v !== undefined) return v;

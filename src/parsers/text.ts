@@ -5,7 +5,7 @@ import { extractMeta } from './meta';
 
 const LEAD_DATE =
   /^(\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?|\d{4}-\d{2}-\d{2}|[A-Za-z]{3}\.? \d{1,2}(?:,? \d{4})?|\d{1,2} [A-Za-z]{3}(?: \d{2,4})?)\s+/;
-const AMT = String.raw`\(?-?\$?\s?\d{1,3}(?:,\d{3})*\.\d{2}\)?-?(?:\s?CR)?`;
+const AMT = String.raw`\(?-?\$?\s?(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2}\)?-?(?:\s?CR)?`;
 const TRAILING_AMOUNTS = new RegExp(`\\s+(${AMT})(?:\\s+(${AMT}))?\\s*$`, 'i');
 
 const SKIP = /\b(beginning balance|ending balance|opening balance|closing balance|previous balance|new balance|balance forward|total|subtotal|daily balance|average balance|minimum payment|payment due|credit limit|available credit|page \d)/i;
@@ -31,8 +31,9 @@ const INFLOW_WORDS = /\b(deposit|payroll|direct dep|salary|transfer from|refund|
 /**
  * Parse statement text (from a PDF or pasted text). Lines are expected in reading order.
  */
-export function parseStatementText(text: string, order: DateOrder = 'MDY', format: 'pdf' | 'text' = 'text'): ParsedStatement {
+export function parseStatementText(text: string, order: DateOrder = 'MDY', format: 'pdf' | 'image' | 'text' = 'text', ocr = false): ParsedStatement {
   const warnings: string[] = [];
+  if (ocr) text = cleanOcrText(text);
   const meta = extractMeta(text, order);
   const type = meta.accountType;
   const endYear = meta.periodEnd ? +meta.periodEnd.slice(0, 4) : new Date().getFullYear();
@@ -104,6 +105,7 @@ export function parseStatementText(text: string, order: DateOrder = 'MDY', forma
 
   return {
     format,
+    ocr: ocr || undefined,
     ...meta,
     periodStart: meta.periodStart ?? transactions[0]?.date,
     periodEnd: meta.periodEnd ?? transactions[transactions.length - 1]?.date,
@@ -117,4 +119,34 @@ function sectionSign(section: Section, value: number, description: string, expli
   if (section === 'out') return -Math.abs(value);
   if (explicitSign) return value;
   return INFLOW_WORDS.test(description) ? Math.abs(value) : -Math.abs(value);
+}
+
+/**
+ * Fix the most common OCR mistakes in numbers and dates without touching words:
+ * "S1,234.S6" -> "$1,234.56", "l2/O5" -> "12/05", "45 .00" -> "45.00", "12,34" (misread dot) -> "12.34".
+ */
+export function cleanOcrText(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .map((line) =>
+      line
+        .replace(/[|]/g, ' ')
+        .replace(/[—–]/g, '-')
+        // join amounts split around the decimal point: "1,234 .56" / "1,234. 56"
+        .replace(/(\d)\s+\.(\d{2})\b/g, '$1.$2')
+        .replace(/(\d)\.\s+(\d{2})\b/g, '$1.$2')
+        // numeric-looking tokens: fix letters that OCR confuses with digits
+        .replace(/(^|\s)([$S]?\(?-?[$S]?[\dOoIlBS,./()-]*\d[\dOoIlBS,./()-]*)(?=\s|$)/g, (_m, pre: string, tok: string) => {
+          let t = tok.replace(/^\(?-?S(?=[\dOoIl])/, (x) => x.replace('S', '$'));
+          const digits = (t.match(/\d/g) ?? []).length;
+          const letters = (t.match(/[OoIlBS]/g) ?? []).length;
+          if (digits >= 2 && letters <= 2) {
+            t = t.replace(/(?<=[\d,./])[Oo]|[Oo](?=[\d,./])/g, '0').replace(/[Il](?=[\d,./])|(?<=[\d,./])[Il]/g, '1').replace(/(?<=[\d.,])S|S(?=\d)/g, '5').replace(/(?<=\d)B|B(?=\d)/g, '8');
+          }
+          // A comma followed by exactly two digits at the end of an amount is a misread decimal point.
+          t = t.replace(/^(\$?\(?-?\$?\d{1,3}(?:[,.]\d{3})*),(\d{2}\)?-?)$/, '$1.$2');
+          return pre + t;
+        }),
+    )
+    .join('\n');
 }

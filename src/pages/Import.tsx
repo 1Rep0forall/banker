@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { Data } from '../useData';
 import { db } from '../db';
-import { parseFile } from '../parsers';
+import { ACCEPTED_FILES, parseFile } from '../parsers';
 import { AUTO_MATCH_SCORE, commitImport, overlapByAccount, rankAccounts, suggestAccountName, type AccountMatch, type ImportResult } from '../lib/importer';
 import { ACCOUNT_TYPES, type AccountType, type ParsedStatement } from '../types';
 import { Card, Money } from '../components/ui';
@@ -18,6 +18,7 @@ interface Job {
   matches?: AccountMatch[];
   duplicateFile?: boolean;
   result?: ImportResult;
+  progress?: { message: string; fraction?: number };
 }
 
 export default function ImportPage({ data }: { data: Data }) {
@@ -31,7 +32,7 @@ export default function ImportPage({ data }: { data: Data }) {
     setJobs((js) => [...fresh, ...js]);
     for (const job of fresh) {
       try {
-        const { parsed, hash } = await parseFile(job.file, data.settings.dateOrder);
+        const { parsed, hash } = await parseFile(job.file, data.settings.dateOrder, (message, fraction) => update(job.id, { progress: { message, fraction } }));
         const accounts = await db.accounts.toArray();
         const matches = rankAccounts(parsed, accounts, await overlapByAccount(db, parsed));
         const duplicateFile = (await db.statements.where('fileHash').equals(hash).count()) > 0;
@@ -49,7 +50,7 @@ export default function ImportPage({ data }: { data: Data }) {
       <header className="page-head">
         <div>
           <h1>Import statements</h1>
-          <p className="muted">Drop in PDF, CSV, OFX or QFX files. Everything is processed on this device — nothing is uploaded.</p>
+          <p className="muted">Drop in PDF, CSV, OFX or QFX files, scanned statements, or photos of paper statements. Everything is processed on this device. Nothing is uploaded.</p>
         </div>
       </header>
 
@@ -59,10 +60,10 @@ export default function ImportPage({ data }: { data: Data }) {
         onDragLeave={() => setDragging(false)}
         onDrop={(e) => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
       >
-        <input type="file" multiple accept=".pdf,.csv,.tsv,.ofx,.qfx,.qbo,.txt" onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ''; }} />
+        <input type="file" multiple accept={ACCEPTED_FILES} onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ''; }} />
         <span className="dropzone-icon" aria-hidden>📄</span>
         <strong>Drag statements here, or click to choose files</strong>
-        <span className="muted small">Tip: CSV/OFX downloads from your bank's website are the most accurate. PDFs work too.</span>
+        <span className="muted small">Tip: CSV/OFX downloads from your bank's website are the most accurate. PDFs, scans and photos work too.</span>
       </label>
 
       {pending.length > 1 && (
@@ -77,7 +78,20 @@ export default function ImportPage({ data }: { data: Data }) {
 }
 
 function JobCard({ job, data, onUpdate, onRemove }: { job: Job; data: Data; onUpdate: (p: Partial<Job>) => void; onRemove: () => void }) {
-  if (job.status === 'parsing') return <Card title={job.file.name}><p className="muted">Reading statement…</p></Card>;
+  if (job.status === 'parsing') {
+    const p = job.progress;
+    return (
+      <Card title={job.file.name}>
+        <p className="muted" aria-live="polite">{p?.message ?? 'Reading statement…'}</p>
+        {p?.fraction !== undefined && (
+          <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(p.fraction * 100)}>
+            <span style={{ width: `${Math.round(p.fraction * 100)}%` }} />
+          </div>
+        )}
+        {p && <p className="small muted">Scanned pages take around 5–20 seconds each. You can keep using the app meanwhile.</p>}
+      </Card>
+    );
+  }
   if (job.status === 'error') {
     return (
       <Card title={job.file.name} action={<button className="btn btn-small btn-ghost" onClick={onRemove}>Remove</button>}>
