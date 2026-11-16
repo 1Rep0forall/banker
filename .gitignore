@@ -1,0 +1,13 @@
+node_modules
+dist
+*.local
+.DS_Store
+# never commit real statements
+statements/
+*.pdf
+*.ofx
+*.qfx
+!tests/fixtures/**
+# fake demo statements are fine to commit
+!samples/**
+public/ocr
