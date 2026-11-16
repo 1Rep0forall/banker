@@ -41,6 +41,15 @@ npm run build     # type-check and build a static site to dist/
 
 The build is a fully static site, so `dist/` can be hosted anywhere (GitHub Pages, Netlify, or just opened locally through `npm run preview`).
 
+### Deploying to GitHub Pages
+
+`.github/workflows/deploy.yml` runs the tests, builds the site, and publishes it on every push to `main` (or on demand from the Actions tab).
+
+One-time setup: in the repository on GitHub, go to **Settings → Pages** and set **Source** to **GitHub Actions**. The site will be at `https://<owner>.github.io/banker/`.
+
+- Pages on a **private** repository needs a paid GitHub plan, and the published site is public either way. That's fine here: the site is just the app, and your financial data only ever lives in your own browser.
+- Data is stored per browser and per site address. Statements imported on `localhost` won't show up on the Pages site (or on another device). Use **Settings → Download backup** and **Restore backup** to move them.
+
 ### Try it with demo data
 
 `samples/` contains **fake** statements: three months of checking CSVs, a savings OFX, a credit card PDF, and a **scanned** credit card PDF (an image with no text, so it's read with OCR). Import the October checking CSV first (it creates the account), then August and September (they're added to the same account). Then import the October card PDF (it creates a new account), then the scanned September one (it's added to that card).
