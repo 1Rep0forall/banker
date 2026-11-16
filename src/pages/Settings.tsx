@@ -4,18 +4,24 @@ import { db } from '../db';
 import { DEFAULT_SETTINGS, type Settings } from '../types';
 import { Card } from '../components/ui';
 import { todayISO } from '../lib/dates';
+import { download } from '../lib/download';
 
 export default function SettingsPage({ data }: { data: Data }) {
   const [s, setS] = useState<Settings>(data.settings);
   const [msg, setMsg] = useState('');
-  const save = async (next: Settings) => { setS(next); await db.settings.put(next); setMsg('Saved ✓'); };
+  const save = async (next: Settings) => {
+    setS(next);
+    // keep check-in progress, which is edited from the dashboard
+    await db.settings.put({ ...next, lastCheckIn: data.settings.lastCheckIn, checkInStreak: data.settings.checkInStreak });
+    setMsg('Saved ✓');
+  };
 
   async function exportBackup() {
     const backup = {
       app: 'banker', version: 1, exportedAt: new Date().toISOString(),
       accounts: await db.accounts.toArray(), statements: await db.statements.toArray(), transactions: await db.transactions.toArray(),
       balances: await db.balances.toArray(), merchantRules: await db.merchantRules.toArray(), dismissals: await db.dismissals.toArray(),
-      settings: await db.settings.toArray(),
+      settings: await db.settings.toArray(), budgets: await db.budgets.toArray(),
     };
     download(`banker-backup-${todayISO()}.json`, JSON.stringify(backup, null, 2), 'application/json');
   }
@@ -32,11 +38,12 @@ export default function SettingsPage({ data }: { data: Data }) {
       const b = JSON.parse(await file.text());
       if (b.app !== 'banker') throw new Error('This is not a Banker backup file.');
       if (!confirm('Replace ALL current data with this backup?')) return;
-      await db.transaction('rw', [db.accounts, db.statements, db.transactions, db.balances, db.merchantRules, db.dismissals, db.settings], async () => {
-        for (const t of [db.accounts, db.statements, db.transactions, db.balances, db.merchantRules, db.dismissals, db.settings]) await t.clear();
+      await db.transaction('rw', [db.accounts, db.statements, db.transactions, db.balances, db.merchantRules, db.dismissals, db.settings, db.budgets], async () => {
+        for (const t of [db.accounts, db.statements, db.transactions, db.balances, db.merchantRules, db.dismissals, db.settings, db.budgets]) await t.clear();
         await db.accounts.bulkAdd(b.accounts); await db.statements.bulkAdd(b.statements); await db.transactions.bulkAdd(b.transactions);
         await db.balances.bulkAdd(b.balances); await db.merchantRules.bulkAdd(b.merchantRules); await db.dismissals.bulkAdd(b.dismissals ?? []);
         await db.settings.bulkAdd(b.settings ?? []);
+        await db.budgets.bulkAdd(b.budgets ?? []);
       });
       setMsg('Backup restored ✓');
     } catch (e) {
@@ -84,11 +91,4 @@ export default function SettingsPage({ data }: { data: Data }) {
       </Card>
     </div>
   );
-}
-
-function download(name: string, content: string, type: string) {
-  const url = URL.createObjectURL(new Blob([content], { type }));
-  const a = Object.assign(document.createElement('a'), { href: url, download: name });
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

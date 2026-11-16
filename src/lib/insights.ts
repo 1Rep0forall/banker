@@ -1,8 +1,10 @@
-import type { Account, Settings, Statement, Transaction } from '../types';
+import type { Account, Budget, Settings, Statement, Transaction } from '../types';
+import type { CalEvent } from './ics';
+import { NON_SPENDING } from './categorize';
 import { isLiability } from '../types';
 import type { RecurringItem } from './recurring';
 import { upcoming } from './recurring';
-import { addDays, daysBetween } from './dates';
+import { addDays, daysBetween, toDate } from './dates';
 import { formatMoney, round2 } from './money';
 import { prettyMerchant } from './merchant';
 
@@ -33,17 +35,83 @@ export interface InsightInput {
   recurring: RecurringItem[];
   settings: Settings;
   today: string;
+  budgets?: Budget[];
 }
 
-export function buildAlerts({ accounts, transactions, statements, recurring, settings, today }: InsightInput): Alert[] {
+/**
+ * Has the current card/loan bill been paid? Looks for payments made after the statement
+ * closed: either a credit on the card itself, or a "card payment" leaving another account
+ * that mentions this bank or the last 4 digits.
+ */
+export function findCardPayment(a: Account, transactions: Transaction[]): { date: string; amount: number } | undefined {
+  if (!a.balanceAsOf) return undefined;
+  const since = a.balanceAsOf;
+  const until = a.paymentDueDate ? addDays(a.paymentDueDate, 3) : addDays(since, 40);
+  const bank = a.institution.toLowerCase().split(/\s+/)[0];
+  const onCard = transactions.filter((t) => t.accountId === a.id && t.amount > 0 && t.date > since && t.date <= until);
+  const fromElsewhere = transactions.filter(
+    (t) => t.accountId !== a.id && t.amount < 0 && t.date > since && t.date <= until && t.category === 'Credit Card Payment' &&
+      ((bank && t.description.toLowerCase().includes(bank)) || (a.last4 && t.description.includes(a.last4))),
+  );
+  const payments = onCard.length ? onCard.map((t) => ({ date: t.date, amount: t.amount })) : fromElsewhere.map((t) => ({ date: t.date, amount: -t.amount }));
+  if (!payments.length) return undefined;
+  const total = round2(payments.reduce((s, p) => s + p.amount, 0));
+  if (a.minimumPayment !== undefined && total < a.minimumPayment) return undefined;
+  return { date: payments[payments.length - 1].date, amount: total };
+}
+
+export interface BudgetRow { category: string; limit: number; spent: number; pct: number }
+
+/** Spending vs budget for the latest month that has data (statements usually lag behind today). */
+export function budgetStatus(budgets: Budget[], transactions: Transaction[], today: string) {
+  const latest = transactions.reduce((m, t) => (t.date > m ? t.date : m), '');
+  const month = (latest && latest.slice(0, 7) <= today.slice(0, 7) ? latest : today).slice(0, 7);
+  const spent = new Map<string, number>();
+  for (const t of transactions) {
+    if (t.date.slice(0, 7) !== month || t.amount >= 0 || NON_SPENDING.has(t.category)) continue;
+    spent.set(t.category, (spent.get(t.category) ?? 0) - t.amount);
+  }
+  const rows: BudgetRow[] = budgets
+    .filter((b) => b.monthly > 0)
+    .map((b) => {
+      const s = round2(spent.get(b.category) ?? 0);
+      return { category: b.category, limit: b.monthly, spent: s, pct: (s / b.monthly) * 100 };
+    })
+    .sort((a, b) => b.pct - a.pct);
+  const isCurrentMonth = month === today.slice(0, 7);
+  const end = toDate(month + '-01');
+  end.setUTCMonth(end.getUTCMonth() + 1, 0);
+  const daysLeft = isCurrentMonth ? daysBetween(today, end.toISOString().slice(0, 10)) : 0;
+  return { month, rows, isCurrentMonth, daysLeft, spentByCategory: spent };
+}
+
+/** Average monthly spend per category over the last `months` full months with data. */
+export function averageSpend(transactions: Transaction[], months = 3): Map<string, number> {
+  const all = [...new Set(transactions.map((t) => t.date.slice(0, 7)))].sort();
+  const use = new Set(all.slice(-months));
+  const sums = new Map<string, number>();
+  for (const t of transactions) {
+    if (!use.has(t.date.slice(0, 7)) || t.amount >= 0 || NON_SPENDING.has(t.category)) continue;
+    sums.set(t.category, (sums.get(t.category) ?? 0) - t.amount);
+  }
+  for (const [k, v] of sums) sums.set(k, round2(v / Math.max(1, use.size)));
+  return sums;
+}
+
+export function buildAlerts({ accounts, transactions, statements, recurring, settings, today, budgets = [] }: InsightInput): Alert[] {
   const alerts: Alert[] = [];
   const cur = settings.currency;
   const active = accounts.filter((a) => !a.archived);
 
   for (const a of active) {
     const to = `/accounts/${a.id}`;
-    // Payment due dates
-    if (isLiability(a.type) && a.paymentDueDate && (a.currentBalance ?? 1) > 0) {
+    // Payment due dates (skipped once a payment shows up)
+    const paid = isLiability(a.type) && a.paymentDueDate ? findCardPayment(a, transactions) : undefined;
+    if (paid) {
+      if (daysBetween(today, a.paymentDueDate!) >= -7) {
+        alerts.push({ key: `paid:${a.id}:${a.paymentDueDate}`, severity: 'good', title: `${a.name} is paid for this cycle`, detail: `${formatMoney(paid.amount, cur)} paid on ${paid.date}. Nice work.`, to });
+      }
+    } else if (isLiability(a.type) && a.paymentDueDate && (a.currentBalance ?? 1) > 0) {
       const d = daysBetween(today, a.paymentDueDate);
       const amt = a.minimumPayment !== undefined ? ` Minimum: ${formatMoney(a.minimumPayment, cur)}.` : '';
       if (d < 0 && d >= -20) {
@@ -132,6 +200,25 @@ export function buildAlerts({ accounts, transactions, statements, recurring, set
     }
   }
 
+  // Budgets
+  const bs = budgetStatus(budgets, transactions, today);
+  for (const r of bs.rows) {
+    const label = bs.isCurrentMonth ? 'this month' : `in ${bs.month}`;
+    if (r.spent > r.limit + 0.005) {
+      alerts.push({ key: `budget-over:${r.category}:${bs.month}:${Math.floor(r.pct / 10)}`, severity: 'warning', title: `Over budget on ${r.category}: ${formatMoney(r.spent, cur)} of ${formatMoney(r.limit, cur)}`, detail: `${formatMoney(r.spent - r.limit, cur)} over ${label}.`, to: '/plan' });
+    } else if (r.pct >= 85 && bs.isCurrentMonth) {
+      alerts.push({ key: `budget-near:${r.category}:${bs.month}`, severity: 'info', title: `${r.category} is at ${Math.round(r.pct)}% of its budget`, detail: `${formatMoney(r.limit - r.spent, cur)} left for the next ${bs.daysLeft} days.`, to: '/plan' });
+    }
+  }
+
+  // Weekly check-in nudge
+  if (accounts.length) {
+    const since = settings.lastCheckIn ? daysBetween(settings.lastCheckIn, today) : undefined;
+    if (since === undefined || since >= 7) {
+      alerts.push({ key: `checkin:${settings.lastCheckIn ?? 'never'}:${Math.floor((since ?? 0) / 7)}`, severity: 'info', title: since === undefined ? 'Try a 5-minute weekly money check-in' : `It's been ${since} days since your money check-in`, detail: 'Four quick steps. It is at the bottom of this page.', to: '/' });
+    }
+  }
+
   const order: Record<Severity, number> = { critical: 0, warning: 1, info: 2, good: 3 };
   return alerts.sort((a, b) => order[a.severity] - order[b.severity]);
 }
@@ -150,7 +237,7 @@ export interface SafeToSpend {
 }
 
 /** Cash in checking/savings minus bills and card minimums due before the next paycheck. */
-export function safeToSpend(accounts: Account[], recurring: RecurringItem[], today: string): SafeToSpend {
+export function safeToSpend(accounts: Account[], recurring: RecurringItem[], today: string, transactions: Transaction[] = []): SafeToSpend {
   const cash = round2(accounts.filter((a) => !a.archived && a.type === 'checking').reduce((s, a) => s + (a.currentBalance ?? 0), 0));
   const income = upcoming(recurring.filter((r) => r.kind === 'income' && r.category === 'Income'), today, addDays(today, 45));
   const nextIncome = income[0];
@@ -159,7 +246,7 @@ export function safeToSpend(accounts: Account[], recurring: RecurringItem[], tod
   const billsBeforePayday = round2(bills.reduce((s, b) => s + Math.abs(b.item.amount), 0));
   const cardPaymentsBeforePayday = round2(
     accounts
-      .filter((a) => !a.archived && isLiability(a.type) && a.paymentDueDate && a.paymentDueDate >= today && a.paymentDueDate <= until)
+      .filter((a) => !a.archived && isLiability(a.type) && a.paymentDueDate && a.paymentDueDate >= today && a.paymentDueDate <= until && !findCardPayment(a, transactions))
       .reduce((s, a) => s + (a.minimumPayment ?? 0), 0),
   );
   return {
@@ -181,4 +268,27 @@ export function netWorth(accounts: Account[]) {
     else assets += a.currentBalance;
   }
   return { assets: round2(assets), debts: round2(debts), net: round2(assets - debts) };
+}
+
+/** Calendar reminders for the next `days` days: bills, paydays, card due dates, and cancel reminders. */
+export function calendarEvents(accounts: Account[], recurring: RecurringItem[], transactions: Transaction[], today: string, currency = 'USD', days = 90): CalEvent[] {
+  const until = addDays(today, days);
+  const events: CalEvent[] = [];
+  for (const { item, date } of upcoming(recurring, today, until)) {
+    const amt = formatMoney(Math.abs(item.amount), currency);
+    if (item.kind === 'income') {
+      events.push({ uid: `inc-${item.id}-${date}`, date, title: `💰 ${item.label} (${amt})` });
+    } else if (item.wantToCancel) {
+      events.push({ uid: `cancel-${item.id}-${date}`, date, title: `❌ ${item.label} renews (${amt}). Cancel?`, description: 'You flagged this to cancel in Banker. Cancel before this date to avoid the charge.', alarmDaysBefore: 3 });
+    } else {
+      events.push({ uid: `bill-${item.id}-${date}`, date, title: `${item.label} (${item.variable ? '≈' : ''}${amt})`, description: `${item.cadence} ${item.category}. Make sure there's enough in the account.`, alarmDaysBefore: 1 });
+    }
+  }
+  for (const a of accounts) {
+    if (a.archived || !isLiability(a.type) || !a.paymentDueDate || a.paymentDueDate < today || a.paymentDueDate > until) continue;
+    if (findCardPayment(a, transactions)) continue;
+    const min = a.minimumPayment !== undefined ? ` (min ${formatMoney(a.minimumPayment, currency)})` : '';
+    events.push({ uid: `due-${a.id}-${a.paymentDueDate}`, date: a.paymentDueDate, title: `💳 Pay ${a.name}${min}`, description: `Statement balance ${formatMoney(a.currentBalance, currency)}. Paying in full avoids interest.`, alarmDaysBefore: 3 });
+  }
+  return events.sort((x, y) => x.date.localeCompare(y.date));
 }

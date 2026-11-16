@@ -84,6 +84,12 @@ export interface MerchantRule {
   wantToCancel?: boolean;
 }
 
+export interface Budget {
+  category: string;
+  /** Monthly limit */
+  monthly: number;
+}
+
 export interface Dismissal {
   key: string;
   dismissedAt: string;
@@ -96,6 +102,9 @@ export interface Settings {
   defaultLowBalance: number;
   largeTransaction: number;
   staleStatementDays: number;
+  /** YYYY-MM-DD of the last weekly check-in */
+  lastCheckIn?: string;
+  checkInStreak?: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {

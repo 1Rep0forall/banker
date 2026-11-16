@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import type { Account, BalanceSnapshot, Dismissal, MerchantRule, Settings, Statement, Transaction } from './types';
+import type { Account, BalanceSnapshot, Budget, Dismissal, MerchantRule, Settings, Statement, Transaction } from './types';
 import { DEFAULT_SETTINGS } from './types';
 
 export class BankerDB extends Dexie {
@@ -10,6 +10,7 @@ export class BankerDB extends Dexie {
   merchantRules!: Table<MerchantRule, string>;
   dismissals!: Table<Dismissal, string>;
   settings!: Table<Settings, string>;
+  budgets!: Table<Budget, string>;
 
   constructor(name = 'banker') {
     super(name);
@@ -22,6 +23,7 @@ export class BankerDB extends Dexie {
       dismissals: 'key',
       settings: 'id',
     });
+    this.version(2).stores({ budgets: 'category' });
   }
 }
 

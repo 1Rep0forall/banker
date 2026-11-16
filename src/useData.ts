@@ -14,10 +14,11 @@ export function useData() {
   const balances = useLiveQuery(() => db.balances.orderBy('date').toArray(), []);
   const rules = useLiveQuery(() => db.merchantRules.toArray(), []);
   const dismissals = useLiveQuery(() => db.dismissals.toArray(), []);
+  const budgets = useLiveQuery(() => db.budgets.toArray(), []);
   const settings = useLiveQuery(() => db.settings.get('settings'), []) ?? DEFAULT_SETTINGS;
   const today = todayISO();
 
-  const loading = !accounts || !transactions || !statements || !balances || !rules || !dismissals;
+  const loading = !accounts || !transactions || !statements || !balances || !rules || !dismissals || !budgets;
 
   const recurring = useMemo(
     () => (transactions && rules ? detectRecurring(transactions, rules, today) : []),
@@ -26,10 +27,10 @@ export function useData() {
   const alerts = useMemo(() => {
     if (loading) return [];
     const dismissed = new Set(dismissals!.map((d) => d.key));
-    return buildAlerts({ accounts: accounts!, transactions: transactions!, statements: statements!, recurring, settings, today }).filter(
+    return buildAlerts({ accounts: accounts!, transactions: transactions!, statements: statements!, recurring, settings, today, budgets: budgets! }).filter(
       (a) => !dismissed.has(a.key),
     );
-  }, [loading, accounts, transactions, statements, recurring, settings, today, dismissals]);
+  }, [loading, accounts, transactions, statements, recurring, settings, today, dismissals, budgets]);
 
   return {
     loading,
@@ -38,6 +39,7 @@ export function useData() {
     statements: statements ?? [],
     balances: balances ?? [],
     rules: rules ?? [],
+    budgets: budgets ?? [],
     settings,
     recurring,
     alerts,

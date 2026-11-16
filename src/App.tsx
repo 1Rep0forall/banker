@@ -7,13 +7,15 @@ import AccountDetail from './pages/AccountDetail';
 import Recurring from './pages/Recurring';
 import Transactions from './pages/Transactions';
 import SettingsPage from './pages/Settings';
+import Plan from './pages/Plan';
 
-const NAV = [
+const NAV: { to: string; label: string; short?: string; icon: string }[] = [
   { to: '/', label: 'Today', icon: '☀️' },
   { to: '/import', label: 'Import', icon: '📥' },
   { to: '/accounts', label: 'Accounts', icon: '🏦' },
   { to: '/recurring', label: 'Recurring', icon: '🔁' },
-  { to: '/transactions', label: 'Transactions', icon: '🧾' },
+  { to: '/plan', label: 'Plan', icon: '🧭' },
+  { to: '/transactions', label: 'Transactions', short: 'Activity', icon: '🧾' },
   { to: '/settings', label: 'Settings', icon: '⚙️' },
 ];
 
@@ -30,6 +32,7 @@ export default function App() {
           <NavLink key={n.to} to={n.to} end={n.to === '/'} className="nav-link">
             <span aria-hidden>{n.icon}</span>
             <span className="nav-label">{n.label}</span>
+            {n.short && <span className="nav-short" aria-hidden>{n.short}</span>}
             {n.to === '/' && urgent > 0 && <span className="badge" aria-label={`${urgent} items need attention`}>{urgent}</span>}
           </NavLink>
         ))}
@@ -45,6 +48,7 @@ export default function App() {
             <Route path="/accounts" element={<Accounts data={data} />} />
             <Route path="/accounts/:id" element={<AccountDetail data={data} />} />
             <Route path="/recurring" element={<Recurring data={data} />} />
+            <Route path="/plan" element={<Plan data={data} />} />
             <Route path="/transactions" element={<Transactions data={data} />} />
             <Route path="/settings" element={<SettingsPage data={data} />} />
           </Routes>

@@ -3,7 +3,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import type { Data } from '../useData';
 import { AlertRow, Card, Empty, Money, Stat, TYPE_ICON } from '../components/ui';
 import { CategoryBars } from '../components/charts';
-import { netWorth, safeToSpend, whenText } from '../lib/insights';
+import { findCardPayment, netWorth, safeToSpend, whenText } from '../lib/insights';
+import { CheckIn } from '../components/CheckIn';
 import { upcoming } from '../lib/recurring';
 import { addDays, addMonths, daysBetween } from '../lib/dates';
 import { NON_SPENDING } from '../lib/categorize';
@@ -17,7 +18,7 @@ export default function Dashboard({ data }: { data: Data }) {
   const navigate = useNavigate();
   const active = accounts.filter((a) => !a.archived);
 
-  const sts = useMemo(() => safeToSpend(accounts, recurring, today), [accounts, recurring, today]);
+  const sts = useMemo(() => safeToSpend(accounts, recurring, today, transactions), [accounts, recurring, today, transactions]);
   const nw = useMemo(() => netWorth(accounts), [accounts]);
   const monthlyBills = round2(recurring.filter((r) => r.kind === 'bill' && r.status === 'active').reduce((s, r) => s - r.monthly, 0));
   const monthlyInterest = round2(active.filter((a) => isLiability(a.type) && a.interestRate && (a.currentBalance ?? 0) > 0).reduce((s, a) => s + (a.currentBalance! * a.interestRate!) / 1200, 0));
@@ -25,16 +26,19 @@ export default function Dashboard({ data }: { data: Data }) {
   // Coming up: recurring + card due dates, next 14 days
   const soon = useMemo(() => {
     const until = addDays(today, 14);
-    const items: { date: string; label: string; amount?: number; kind: 'bill' | 'income' | 'due'; to: string }[] = upcoming(recurring, today, until).map(({ item, date }) => ({
+    const items: { date: string; label: string; amount?: number; kind: 'bill' | 'income' | 'due' | 'paid'; to: string }[] = upcoming(recurring, today, until).map(({ item, date }) => ({
       date, label: item.label, amount: item.amount, kind: item.kind, to: '/recurring',
     }));
     for (const a of active) {
       if (isLiability(a.type) && a.paymentDueDate && a.paymentDueDate >= today && a.paymentDueDate <= until) {
-        items.push({ date: a.paymentDueDate, label: `${a.name} payment due`, amount: a.minimumPayment !== undefined ? -a.minimumPayment : undefined, kind: 'due', to: `/accounts/${a.id}` });
+        const paid = findCardPayment(a, transactions);
+        items.push(paid
+          ? { date: a.paymentDueDate, label: `${a.name} paid ✓`, kind: 'paid', to: `/accounts/${a.id}` }
+          : { date: a.paymentDueDate, label: `${a.name} payment due`, amount: a.minimumPayment !== undefined ? -a.minimumPayment : undefined, kind: 'due', to: `/accounts/${a.id}` });
       }
     }
     return items.sort((x, y) => x.date.localeCompare(y.date));
-  }, [recurring, active, today]);
+  }, [recurring, active, today, transactions]);
 
   // Spending by category: latest month in the data vs the month before
   const spending = useMemo(() => {
@@ -118,7 +122,7 @@ export default function Dashboard({ data }: { data: Data }) {
               {soon.map((s, i) => {
                 const d = daysBetween(today, s.date);
                 return (
-                  <li key={i} className={d <= 2 ? 'soon' : ''}>
+                  <li key={i} className={s.kind === 'paid' ? 'done' : d <= 2 ? 'soon' : ''}>
                     <Link to={s.to}>
                       <span className="when">{whenText(d)}<br /><small className="muted">{s.date.slice(5)}</small></span>
                       <span className="what">{s.kind === 'income' ? '💰 ' : s.kind === 'due' ? '📅 ' : ''}{s.label}</span>
@@ -157,6 +161,8 @@ export default function Dashboard({ data }: { data: Data }) {
           ) : <p className="muted">No spending found yet.</p>}
         </Card>
       </div>
+
+      <CheckIn data={data} />
     </div>
   );
 }

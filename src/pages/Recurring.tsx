@@ -7,6 +7,7 @@ import { Card, Money, Stat } from '../components/ui';
 import { formatMoney, round2 } from '../lib/money';
 import { addDays, daysBetween } from '../lib/dates';
 import { whenText } from '../lib/insights';
+import { CalendarButton } from '../components/CalendarButton';
 
 async function setRule(merchant: string, patch: Partial<{ recurring: 'confirmed' | 'ignored' | undefined; label: string; wantToCancel: boolean }>) {
   const existing = (await db.merchantRules.get(merchant)) ?? { merchant };
@@ -33,6 +34,7 @@ export default function Recurring({ data }: { data: Data }) {
           <h1>Recurring</h1>
           <p className="muted">Subscriptions, bills and paychecks I spotted repeating in your statements.</p>
         </div>
+        <CalendarButton data={data} />
       </header>
       <div className="stats">
         <Stat label="Bills & subscriptions" value={<>{formatMoney(billsMonthly, cur)}<small>/mo</small></>} hint={`${formatMoney(billsMonthly * 12, cur)} per year`} />
